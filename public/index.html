@@ -51,7 +51,6 @@
   .sq{width:60px;height:60px;border-radius:18px;background:var(--raised);font-size:21px;color:var(--muted);
     display:flex;align-items:center;justify-content:center}
 
-  /* list + settings */
   .head{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line)}
   .head h1{margin:0;font-size:18px;font-weight:600;flex:1}
   .scroll{flex:1;overflow-y:auto}
@@ -83,8 +82,8 @@
   .toggle input{width:auto;height:auto;transform:scale(1.3);accent-color:var(--signal)}
   .toggle span{flex:1}
   .hint{font-size:13px;color:var(--muted)}
+  .warnline{font-size:13px;color:var(--end);min-height:1.2em}
 
-  /* in-call */
   #call{align-items:center;justify-content:center;text-align:center;padding:30px}
   .peer{font-size:30px;font-weight:500;margin-top:10px}
   .state{margin-top:8px;font-size:15px;color:var(--muted)}
@@ -105,20 +104,27 @@
 
 <audio id="remoteAudio" autoplay playsinline></audio>
 
-<!-- ================= SETUP ================= -->
 <section id="setup" class="screen">
-  <div class="head"><h1>Choose your ID</h1></div>
+  <div class="head"><h1 id="setupTitle">Create your account</h1></div>
   <div class="panel">
-    <p class="hint">Others dial you by this ID. Letters and numbers, no spaces. It can't be changed without clearing your data.</p>
+    <div class="segs">
+      <button type="button" class="seg on" id="segNew" onclick="setMode('signup')">New account</button>
+      <button type="button" class="seg" id="segOld" onclick="setMode('signin')">Sign in</button>
+    </div>
+    <p class="hint" id="setupHint">Others dial you by this ID. The password stops anyone else claiming it.</p>
     <div>
       <label for="myId">Your ID</label>
-      <input id="myId" placeholder="gaurav" autocapitalize="none" autocomplete="off">
+      <input id="myId" placeholder="gaurav" autocapitalize="none" autocomplete="username">
     </div>
-    <button class="primary" onclick="claimId()">Continue</button>
+    <div>
+      <label for="myPass">Password</label>
+      <input id="myPass" type="password" placeholder="At least 6 characters" autocomplete="current-password">
+    </div>
+    <div class="warnline" id="authWarn"></div>
+    <button class="primary" id="authBtn" onclick="submitAuth()">Create account</button>
   </div>
 </section>
 
-<!-- ================= DIALER ================= -->
 <section id="dialer" class="screen">
   <div class="top">
     <div class="dot" id="statusDot"></div>
@@ -141,7 +147,6 @@
   </div>
 </section>
 
-<!-- ================= CONTACTS ================= -->
 <section id="list" class="screen">
   <div class="head">
     <button class="linkbtn" onclick="show('dialer')">‹ Back</button>
@@ -172,7 +177,6 @@
   </form>
 </section>
 
-<!-- ================= SETTINGS ================= -->
 <section id="settings" class="screen">
   <div class="head">
     <button class="linkbtn" onclick="show('list')">‹ Back</button>
@@ -181,6 +185,10 @@
   <label class="toggle">
     <input type="checkbox" id="autoDial">
     <span>Call automatically after a pause</span>
+  </label>
+  <label class="toggle">
+    <input type="checkbox" id="knownOnly">
+    <span>Only accept calls from my contacts</span>
   </label>
   <div class="panel">
     <div>
@@ -195,11 +203,11 @@
     </div>
     <p class="hint">Your ID is <b id="idEcho"></b>. App calls need both people to have this page open.</p>
     <button class="ghost" onclick="exportData()">Export contacts</button>
+    <button class="ghost" onclick="signOut()">Sign out</button>
     <button class="ghost" onclick="resetAll()">Clear everything</button>
   </div>
 </section>
 
-<!-- ================= IN CALL ================= -->
 <section id="call" class="screen">
   <div class="via" id="callDir"></div>
   <div class="peer" id="callPeer"></div>
@@ -210,9 +218,9 @@
 <div class="toast" id="toast"></div>
 
 <script>
-/* ------------------------------------------------------------------ state */
 const KEY = 'quickdial.web.v1';
-let db = { id:'', items:[], auto:false, delay:3000 };
+let db = { id:'', pass:'', items:[], auto:false, delay:3000, knownOnly:false };
+let authMode = 'signup';
 let code = '';
 let idleTimer = null, tick = null;
 
@@ -220,7 +228,6 @@ let ws = null, wsReady = false, reconnectAt = 1000;
 let pc = null, localStream = null, peer = null, incoming = null;
 let iceQueue = [];
 
-/* ------------------------------------------------------------------ store */
 function load(){
   try{ const raw = localStorage.getItem(KEY); if(raw) db = { ...db, ...JSON.parse(raw) }; }catch(e){}
   if(!Array.isArray(db.items)) db.items = [];
@@ -234,6 +241,7 @@ function show(id){
   if(id === 'settings'){
     document.getElementById('autoDial').checked = db.auto;
     document.getElementById('delay').value = String(db.delay);
+    document.getElementById('knownOnly').checked = db.knownOnly;
     document.getElementById('idEcho').textContent = db.id;
   }
 }
@@ -243,17 +251,44 @@ function toast(msg){
   clearTimeout(t._t); t._t = setTimeout(()=>t.classList.remove('show'), 2600);
 }
 
-/* ------------------------------------------------------------------ setup */
-function claimId(){
-  const v = document.getElementById('myId').value.trim().toLowerCase();
-  if(!/^[a-z0-9_.-]{2,20}$/.test(v)){
-    toast('Use 2-20 letters, numbers, dot, dash or underscore'); return;
-  }
-  db.id = v; persist();
-  show('dialer'); connect(); refresh();
+function setMode(m){
+  authMode = m;
+  document.getElementById('segNew').classList.toggle('on', m === 'signup');
+  document.getElementById('segOld').classList.toggle('on', m === 'signin');
+  document.getElementById('setupTitle').textContent =
+    m === 'signup' ? 'Create your account' : 'Sign in';
+  document.getElementById('setupHint').textContent = m === 'signup'
+    ? 'Others dial you by this ID. The password stops anyone else claiming it.'
+    : 'Use the ID and password you created on your other device.';
+  document.getElementById('authBtn').textContent =
+    m === 'signup' ? 'Create account' : 'Sign in';
+  document.getElementById('authWarn').textContent = '';
 }
 
-/* ------------------------------------------------------------- signalling */
+function submitAuth(){
+  const id = document.getElementById('myId').value.trim().toLowerCase();
+  const pass = document.getElementById('myPass').value;
+  const warn = document.getElementById('authWarn');
+
+  if(!/^[a-z0-9_.-]{2,20}$/.test(id)){
+    warn.textContent = 'Use 2-20 letters, numbers, dot, dash or underscore'; return;
+  }
+  if(pass.length < 6){
+    warn.textContent = 'Password must be at least 6 characters'; return;
+  }
+  warn.textContent = '';
+  document.getElementById('authBtn').textContent = 'Connecting…';
+
+  db.id = id; db.pass = pass;
+  connect();
+}
+
+function signOut(){
+  db.id = ''; db.pass = ''; persist();
+  if(ws) { try{ ws.close(); }catch(e){} }
+  location.reload();
+}
+
 function connect(){
   if(!db.id) return;
   const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
@@ -261,7 +296,7 @@ function connect(){
 
   ws.onopen = ()=>{
     reconnectAt = 1000;
-    ws.send(JSON.stringify({ type:'register', id: db.id }));
+    ws.send(JSON.stringify({ type:'register', id: db.id, password: db.pass, mode: authMode }));
   };
   ws.onmessage = (ev)=>{
     let m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
@@ -269,6 +304,7 @@ function connect(){
   };
   ws.onclose = ()=>{
     wsReady = false; paintStatus();
+    if(!db.id || !db.pass) return;
     setTimeout(connect, reconnectAt);
     reconnectAt = Math.min(reconnectAt * 2, 15000);
   };
@@ -283,12 +319,36 @@ function paintStatus(){
 }
 
 async function handleSignal(m){
-  if(m.type === 'registered'){ wsReady = true; paintStatus(); return; }
+  if(m.type === 'registered'){
+    wsReady = true;
+    persist();
+    paintStatus();
+    if(!document.getElementById('dialer').classList.contains('on')){
+      show('dialer'); refresh();
+    }
+    return;
+  }
+  if(m.type === 'authfail'){
+    wsReady = false;
+    const warn = document.getElementById('authWarn');
+    if(warn) warn.textContent = m.reason || 'Could not sign in';
+    document.getElementById('authBtn').textContent =
+      authMode === 'signup' ? 'Create account' : 'Sign in';
+    db.pass = '';
+    if(ws){ ws.onclose = null; try{ ws.close(); }catch(e){} ws = null; }
+    show('setup');
+    return;
+  }
   if(m.type === 'replaced'){ toast('Your ID was opened on another device'); return; }
   if(m.type === 'unreachable'){ endCall('They are not online'); return; }
 
   if(m.type === 'offer'){
     if(pc){ signal({ type:'busy', to:m.from }); return; }
+    if(db.knownOnly && !knownCaller(m.from)){
+      signal({ type:'reject', to:m.from });
+      toast('Blocked a call from ' + m.from);
+      return;
+    }
     incoming = m;
     peer = m.from;
     showCallScreen('Incoming call', nameFor(m.from), 'ringing');
@@ -313,7 +373,10 @@ async function flushIce(){
   while(iceQueue.length){ await pc.addIceCandidate(iceQueue.shift()).catch(()=>{}); }
 }
 
-/* ------------------------------------------------------------------ calls */
+function knownCaller(id){
+  return db.items.some(i=>i.kind === 'app' && i.target.toLowerCase() === String(id).toLowerCase());
+}
+
 function nameFor(id){
   const hit = db.items.find(i=>i.kind === 'app' && i.target.toLowerCase() === String(id).toLowerCase());
   return hit ? hit.name : id;
@@ -425,7 +488,6 @@ function renderCallControls(mode){
   }
 }
 
-/* ----------------------------------------------------------------- keypad */
 const keys = document.getElementById('keys');
 ['1','2','3','4','5','6','7','8','9','','0',''].forEach(d=>{
   const b = document.createElement('button');
@@ -492,7 +554,6 @@ function startCall(){
   }
 }
 
-/* --------------------------------------------------------------- contacts */
 let kind = 'phone';
 function setKind(k){
   kind = k;
@@ -550,12 +611,13 @@ function saveContact(e){
   renderList(); refresh();
 }
 
-/* --------------------------------------------------------------- settings */
 document.getElementById('autoDial').onchange = (e)=>{ db.auto = e.target.checked; persist(); refresh(); };
 document.getElementById('delay').onchange = (e)=>{ db.delay = Number(e.target.value); persist(); refresh(); };
+document.getElementById('knownOnly').onchange = (e)=>{ db.knownOnly = e.target.checked; persist(); };
 
 function exportData(){
-  const blob = new Blob([JSON.stringify(db,null,2)],{type:'application/json'});
+  const safe = { ...db }; delete safe.pass;
+  const blob = new Blob([JSON.stringify(safe,null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'quickdial-backup.json';
@@ -567,7 +629,6 @@ function resetAll(){
   location.reload();
 }
 
-/* ------------------------------------------------------------ installable */
 const manifest = {
   name:'Quick Dial', short_name:'Quick Dial', display:'standalone',
   background_color:'#0E1118', theme_color:'#0E1118', start_url:'.'
@@ -577,11 +638,10 @@ ml.rel = 'manifest';
 ml.href = URL.createObjectURL(new Blob([JSON.stringify(manifest)],{type:'application/json'}));
 document.head.appendChild(ml);
 
-/* ------------------------------------------------------------------ start */
 load();
 setKind('phone');
-if(db.id){ show('dialer'); connect(); refresh(); paintStatus(); }
-else show('setup');
+if(db.id && db.pass){ authMode = 'signin'; show('dialer'); connect(); refresh(); paintStatus(); }
+else { setMode('signup'); show('setup'); }
 
 document.addEventListener('keydown', e=>{
   if(document.activeElement.tagName === 'INPUT') return;
