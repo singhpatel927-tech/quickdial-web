@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0E1118">
+<title>Quick Dial</title>
+<style>
+  :root{
+    --ink:#0E1118; --raised:#181D29; --line:#252C3B;
+    --text:#EAEDF4; --muted:#79839B; --signal:#F0A93B;
+    --call:#2E9E63; --end:#C0524B; --off:#4A5266;
+    --pad: env(safe-area-inset-bottom, 0px);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    margin:0;background:var(--ink);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    font-size:16px;line-height:1.4;overscroll-behavior:none;
+  }
+  button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+  .screen{display:none;height:100dvh;flex-direction:column}
+  .screen.on{display:flex}
+
+  .top{display:flex;align-items:center;gap:10px;padding:14px 18px 0}
+  .brand{flex:1;font-size:13px;letter-spacing:.14em;color:var(--muted)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--off)}
+  .dot.live{background:var(--call)}
+  .linkbtn{font-size:15px;color:var(--signal);padding:8px 2px}
+
+  .readout{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 22px;text-align:center;min-height:0}
+  .code{font-size:clamp(52px,18vw,80px);font-weight:300;letter-spacing:.04em;
+    font-variant-numeric:tabular-nums;line-height:1;color:var(--signal)}
+  .code.empty{color:var(--line)}
+  .who{margin-top:16px;font-size:23px;font-weight:500;min-height:1.4em}
+  .who.miss{color:var(--muted);font-size:17px;font-weight:400}
+  .via{margin-top:4px;font-size:13px;color:var(--muted)}
+  .countdown{margin-top:10px;font-size:13px;color:var(--signal);min-height:1.2em}
+
+  .keys{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;padding:0 20px}
+  .key{height:62px;border-radius:16px;background:var(--raised);font-size:26px;
+    font-variant-numeric:tabular-nums;display:flex;align-items:center;justify-content:center}
+  .key:active{background:#232A3A}
+  .key.blank{background:none;pointer-events:none}
+
+  .actions{display:flex;gap:12px;padding:14px 20px calc(18px + var(--pad))}
+  .callbtn{flex:1;height:60px;border-radius:18px;background:var(--call);font-size:18px;font-weight:600;
+    display:flex;align-items:center;justify-content:center}
+  .callbtn[disabled]{background:var(--raised);color:var(--off)}
+  .sq{width:60px;height:60px;border-radius:18px;background:var(--raised);font-size:21px;color:var(--muted);
+    display:flex;align-items:center;justify-content:center}
+
+  /* list + settings */
+  .head{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line)}
+  .head h1{margin:0;font-size:18px;font-weight:600;flex:1}
+  .scroll{flex:1;overflow-y:auto}
+
+  .row{display:flex;align-items:center;gap:13px;padding:12px 18px;border-bottom:1px solid var(--line)}
+  .tag{min-width:46px;height:46px;padding:0 8px;border-radius:12px;background:var(--raised);
+    display:flex;align-items:center;justify-content:center;font-size:18px;color:var(--signal);flex:0 0 auto}
+  .rowmain{flex:1;min-width:0}
+  .rowname{font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rowsub{font-size:13px;color:var(--muted)}
+  .pill{font-size:11px;padding:2px 7px;border-radius:20px;background:var(--line);color:var(--muted);margin-left:6px}
+  .del{padding:10px;color:var(--muted);font-size:14px}
+  .empty{padding:44px 30px;text-align:center;color:var(--muted)}
+
+  form,.panel{padding:16px 18px calc(18px + var(--pad));border-top:1px solid var(--line);display:grid;gap:11px}
+  .panel{border-top:0}
+  label{font-size:13px;color:var(--muted);display:block;margin-bottom:5px}
+  input,select{width:100%;height:50px;padding:0 13px;border-radius:12px;background:var(--raised);
+    border:1px solid var(--line);color:var(--text);font-size:16px}
+  input:focus,select:focus{outline:2px solid var(--signal);outline-offset:-1px}
+  .pair{display:grid;grid-template-columns:84px 1fr;gap:10px}
+  .segs{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+  .seg{height:48px;border-radius:12px;background:var(--raised);border:1px solid var(--line);
+    display:flex;align-items:center;justify-content:center;font-size:15px;color:var(--muted)}
+  .seg.on{border-color:var(--signal);color:var(--signal)}
+  .primary{height:52px;border-radius:14px;background:var(--signal);color:#161207;font-weight:600;font-size:16px}
+  .ghost{height:48px;border-radius:14px;background:var(--raised);color:var(--text);font-size:15px}
+  .toggle{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line);font-size:15px}
+  .toggle input{width:auto;height:auto;transform:scale(1.3);accent-color:var(--signal)}
+  .toggle span{flex:1}
+  .hint{font-size:13px;color:var(--muted)}
+
+  /* in-call */
+  #call{align-items:center;justify-content:center;text-align:center;padding:30px}
+  .peer{font-size:30px;font-weight:500;margin-top:10px}
+  .state{margin-top:8px;font-size:15px;color:var(--muted)}
+  .callrow{display:flex;gap:16px;margin-top:44px}
+  .big{width:74px;height:74px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:26px}
+  .big.end{background:var(--end)}
+  .big.accept{background:var(--call)}
+  .big.mute{background:var(--raised)}
+  .big.mute.on{background:var(--signal);color:#161207}
+  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(24px + var(--pad));
+    background:var(--raised);border:1px solid var(--line);padding:11px 18px;border-radius:12px;
+    font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;max-width:88%;text-align:center}
+  .toast.show{opacity:1}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<audio id="remoteAudio" autoplay playsinline></audio>
+
+<!-- ================= SETUP ================= -->
+<section id="setup" class="screen">
+  <div class="head"><h1>Choose your ID</h1></div>
+  <div class="panel">
+    <p class="hint">Others dial you by this ID. Letters and numbers, no spaces. It can't be changed without clearing your data.</p>
+    <div>
+      <label for="myId">Your ID</label>
+      <input id="myId" placeholder="gaurav" autocapitalize="none" autocomplete="off">
+    </div>
+    <button class="primary" onclick="claimId()">Continue</button>
+  </div>
+</section>
+
+<!-- ================= DIALER ================= -->
+<section id="dialer" class="screen">
+  <div class="top">
+    <div class="dot" id="statusDot"></div>
+    <div class="brand" id="brandLine">QUICK DIAL</div>
+    <button class="linkbtn" onclick="show('list')">Contacts</button>
+  </div>
+
+  <div class="readout">
+    <div id="code" class="code empty">—</div>
+    <div id="who" class="who"></div>
+    <div id="via" class="via"></div>
+    <div id="countdown" class="countdown"></div>
+  </div>
+
+  <div class="keys" id="keys"></div>
+
+  <div class="actions">
+    <button class="sq" onclick="backspace()" aria-label="Backspace">⌫</button>
+    <button id="callBtn" class="callbtn" disabled onclick="startCall()">Call</button>
+  </div>
+</section>
+
+<!-- ================= CONTACTS ================= -->
+<section id="list" class="screen">
+  <div class="head">
+    <button class="linkbtn" onclick="show('dialer')">‹ Back</button>
+    <h1>Contacts</h1>
+    <button class="linkbtn" onclick="show('settings')">Settings</button>
+  </div>
+  <div class="scroll" id="rows"></div>
+  <form onsubmit="saveContact(event)">
+    <div class="segs">
+      <button type="button" class="seg on" id="segPhone" onclick="setKind('phone')">Phone number</button>
+      <button type="button" class="seg" id="segApp" onclick="setKind('app')">App ID</button>
+    </div>
+    <div class="pair">
+      <div>
+        <label for="fCode">Code</label>
+        <input id="fCode" inputmode="numeric" placeholder="1" required>
+      </div>
+      <div>
+        <label for="fName">Name</label>
+        <input id="fName" placeholder="Amit" required>
+      </div>
+    </div>
+    <div>
+      <label for="fTarget" id="targetLabel">Phone number</label>
+      <input id="fTarget" placeholder="+919305578983" required autocapitalize="none">
+    </div>
+    <button class="primary" type="submit">Save contact</button>
+  </form>
+</section>
+
+<!-- ================= SETTINGS ================= -->
+<section id="settings" class="screen">
+  <div class="head">
+    <button class="linkbtn" onclick="show('list')">‹ Back</button>
+    <h1>Settings</h1>
+  </div>
+  <label class="toggle">
+    <input type="checkbox" id="autoDial">
+    <span>Call automatically after a pause</span>
+  </label>
+  <div class="panel">
+    <div>
+      <label for="delay">Wait before auto-calling</label>
+      <select id="delay">
+        <option value="2000">2 seconds</option>
+        <option value="3000">3 seconds</option>
+        <option value="4000">4 seconds</option>
+        <option value="5000">5 seconds</option>
+        <option value="8000">8 seconds</option>
+      </select>
+    </div>
+    <p class="hint">Your ID is <b id="idEcho"></b>. App calls need both people to have this page open.</p>
+    <button class="ghost" onclick="exportData()">Export contacts</button>
+    <button class="ghost" onclick="resetAll()">Clear everything</button>
+  </div>
+</section>
+
+<!-- ================= IN CALL ================= -->
+<section id="call" class="screen">
+  <div class="via" id="callDir"></div>
+  <div class="peer" id="callPeer"></div>
+  <div class="state" id="callState"></div>
+  <div class="callrow" id="callControls"></div>
+</section>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ------------------------------------------------------------------ state */
+const KEY = 'quickdial.web.v1';
+let db = { id:'', items:[], auto:false, delay:3000 };
+let code = '';
+let idleTimer = null, tick = null;
+
+let ws = null, wsReady = false, reconnectAt = 1000;
+let pc = null, localStream = null, peer = null, incoming = null;
+let iceQueue = [];
+
+/* ------------------------------------------------------------------ store */
+function load(){
+  try{ const raw = localStorage.getItem(KEY); if(raw) db = { ...db, ...JSON.parse(raw) }; }catch(e){}
+  if(!Array.isArray(db.items)) db.items = [];
+}
+function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(db)); }catch(e){} }
+
+function show(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('on'));
+  document.getElementById(id).classList.add('on');
+  if(id === 'list') renderList();
+  if(id === 'settings'){
+    document.getElementById('autoDial').checked = db.auto;
+    document.getElementById('delay').value = String(db.delay);
+    document.getElementById('idEcho').textContent = db.id;
+  }
+}
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._t); t._t = setTimeout(()=>t.classList.remove('show'), 2600);
+}
+
+/* ------------------------------------------------------------------ setup */
+function claimId(){
+  const v = document.getElementById('myId').value.trim().toLowerCase();
+  if(!/^[a-z0-9_.-]{2,20}$/.test(v)){
+    toast('Use 2-20 letters, numbers, dot, dash or underscore'); return;
+  }
+  db.id = v; persist();
+  show('dialer'); connect(); refresh();
+}
+
+/* ------------------------------------------------------------- signalling */
+function connect(){
+  if(!db.id) return;
+  const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  ws = new WebSocket(proto + location.host);
+
+  ws.onopen = ()=>{
+    reconnectAt = 1000;
+    ws.send(JSON.stringify({ type:'register', id: db.id }));
+  };
+  ws.onmessage = (ev)=>{
+    let m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
+    handleSignal(m);
+  };
+  ws.onclose = ()=>{
+    wsReady = false; paintStatus();
+    setTimeout(connect, reconnectAt);
+    reconnectAt = Math.min(reconnectAt * 2, 15000);
+  };
+  ws.onerror = ()=>{};
+}
+function signal(obj){
+  if(ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+}
+function paintStatus(){
+  document.getElementById('statusDot').classList.toggle('live', wsReady);
+  document.getElementById('brandLine').textContent = wsReady ? db.id.toUpperCase() : 'CONNECTING…';
+}
+
+async function handleSignal(m){
+  if(m.type === 'registered'){ wsReady = true; paintStatus(); return; }
+  if(m.type === 'replaced'){ toast('Your ID was opened on another device'); return; }
+  if(m.type === 'unreachable'){ endCall('They are not online'); return; }
+
+  if(m.type === 'offer'){
+    if(pc){ signal({ type:'busy', to:m.from }); return; }
+    incoming = m;
+    peer = m.from;
+    showCallScreen('Incoming call', nameFor(m.from), 'ringing');
+    return;
+  }
+  if(m.type === 'answer' && pc){
+    await pc.setRemoteDescription(m.answer);
+    flushIce();
+    document.getElementById('callState').textContent = 'Connected';
+    return;
+  }
+  if(m.type === 'ice'){
+    if(pc && pc.remoteDescription) await pc.addIceCandidate(m.candidate).catch(()=>{});
+    else iceQueue.push(m.candidate);
+    return;
+  }
+  if(m.type === 'busy'){ endCall('They are on another call'); return; }
+  if(m.type === 'reject'){ endCall('Call declined'); return; }
+  if(m.type === 'hangup'){ endCall('Call ended'); return; }
+}
+async function flushIce(){
+  while(iceQueue.length){ await pc.addIceCandidate(iceQueue.shift()).catch(()=>{}); }
+}
+
+/* ------------------------------------------------------------------ calls */
+function nameFor(id){
+  const hit = db.items.find(i=>i.kind === 'app' && i.target.toLowerCase() === String(id).toLowerCase());
+  return hit ? hit.name : id;
+}
+
+async function makePeer(){
+  pc = new RTCPeerConnection({
+    iceServers:[
+      { urls:'stun:stun.l.google.com:19302' },
+      { urls:'stun:stun1.l.google.com:19302' }
+    ]
+  });
+  pc.onicecandidate = (e)=>{
+    if(e.candidate) signal({ type:'ice', to:peer, candidate:e.candidate });
+  };
+  pc.ontrack = (e)=>{ document.getElementById('remoteAudio').srcObject = e.streams[0]; };
+  pc.onconnectionstatechange = ()=>{
+    if(pc && (pc.connectionState === 'failed' || pc.connectionState === 'disconnected')){
+      endCall('Connection lost');
+    }
+  };
+  localStream = await navigator.mediaDevices.getUserMedia({ audio:true });
+  localStream.getTracks().forEach(t=>pc.addTrack(t, localStream));
+}
+
+async function appCall(targetId){
+  if(!wsReady){ toast('Not connected to the server yet'); return; }
+  peer = targetId.toLowerCase();
+  showCallScreen('Calling', nameFor(peer), 'dialing');
+  try{
+    await makePeer();
+    const offer = await pc.createOffer({ offerToReceiveAudio:true });
+    await pc.setLocalDescription(offer);
+    signal({ type:'offer', to:peer, offer });
+  }catch(e){
+    endCall('Microphone permission is needed');
+  }
+}
+
+async function acceptCall(){
+  const m = incoming; incoming = null;
+  document.getElementById('callState').textContent = 'Connecting…';
+  try{
+    await makePeer();
+    await pc.setRemoteDescription(m.offer);
+    await flushIce();
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    signal({ type:'answer', to:peer, answer });
+    renderCallControls('active');
+    document.getElementById('callState').textContent = 'Connected';
+  }catch(e){
+    signal({ type:'reject', to:peer });
+    endCall('Microphone permission is needed');
+  }
+}
+
+function rejectCall(){
+  signal({ type:'reject', to:peer });
+  incoming = null;
+  endCall('Declined');
+}
+
+function hangUp(){
+  signal({ type:'hangup', to:peer });
+  endCall('Call ended');
+}
+
+function endCall(reason){
+  if(pc){ try{ pc.close(); }catch(e){} pc = null; }
+  if(localStream){ localStream.getTracks().forEach(t=>t.stop()); localStream = null; }
+  iceQueue = []; incoming = null; peer = null;
+  document.getElementById('remoteAudio').srcObject = null;
+  code = '';
+  show('dialer'); refresh();
+  if(reason) toast(reason);
+}
+
+function toggleMute(btn){
+  if(!localStream) return;
+  const track = localStream.getAudioTracks()[0];
+  track.enabled = !track.enabled;
+  btn.classList.toggle('on', !track.enabled);
+}
+
+function showCallScreen(dir, who, mode){
+  document.getElementById('callDir').textContent = dir;
+  document.getElementById('callPeer').textContent = who;
+  document.getElementById('callState').textContent = mode === 'ringing' ? 'wants to talk' : 'Ringing…';
+  renderCallControls(mode);
+  show('call');
+}
+
+function renderCallControls(mode){
+  const box = document.getElementById('callControls');
+  box.innerHTML = '';
+  if(mode === 'ringing'){
+    const no = document.createElement('button');
+    no.className = 'big end'; no.textContent = '✕'; no.onclick = rejectCall;
+    const yes = document.createElement('button');
+    yes.className = 'big accept'; yes.textContent = '✓'; yes.onclick = acceptCall;
+    box.append(no, yes);
+  }else{
+    const mute = document.createElement('button');
+    mute.className = 'big mute'; mute.textContent = '🎙'; mute.onclick = ()=>toggleMute(mute);
+    const end = document.createElement('button');
+    end.className = 'big end'; end.textContent = '✕'; end.onclick = hangUp;
+    box.append(mute, end);
+  }
+}
+
+/* ----------------------------------------------------------------- keypad */
+const keys = document.getElementById('keys');
+['1','2','3','4','5','6','7','8','9','','0',''].forEach(d=>{
+  const b = document.createElement('button');
+  b.className = d ? 'key' : 'key blank';
+  b.textContent = d;
+  if(d) b.onclick = ()=>press(d);
+  keys.appendChild(b);
+});
+
+function press(d){
+  if(code.length >= 6) return;
+  code += d; refresh();
+}
+function backspace(){ code = code.slice(0,-1); refresh(); }
+
+function match(){ return db.items.find(i=>i.code === code); }
+
+function refresh(){
+  clearTimeout(idleTimer); clearInterval(tick);
+  document.getElementById('countdown').textContent = '';
+
+  const el = document.getElementById('code');
+  el.textContent = code || '—';
+  el.classList.toggle('empty', !code);
+
+  const hit = match();
+  const who = document.getElementById('who');
+  const via = document.getElementById('via');
+  const btn = document.getElementById('callBtn');
+
+  if(hit){
+    who.textContent = hit.name; who.classList.remove('miss');
+    via.textContent = hit.kind === 'app' ? 'App call to ' + hit.target : hit.target;
+    btn.disabled = false;
+    if(db.auto) armAutoDial();
+  }else{
+    who.textContent = code ? 'No contact on this code' : '';
+    who.classList.toggle('miss', !!code);
+    via.textContent = '';
+    btn.disabled = true;
+  }
+}
+
+function armAutoDial(){
+  let left = Math.round(db.delay / 1000);
+  const cd = document.getElementById('countdown');
+  cd.textContent = 'Calling in ' + left + '…';
+  tick = setInterval(()=>{
+    left -= 1;
+    cd.textContent = left > 0 ? 'Calling in ' + left + '…' : 'Calling…';
+  }, 1000);
+  idleTimer = setTimeout(startCall, db.delay);
+}
+
+function startCall(){
+  clearTimeout(idleTimer); clearInterval(tick);
+  const hit = match();
+  if(!hit) return;
+  if(hit.kind === 'app'){
+    appCall(hit.target);
+  }else{
+    window.location.href = 'tel:' + hit.target.replace(/\s+/g,'');
+    code = ''; refresh();
+  }
+}
+
+/* --------------------------------------------------------------- contacts */
+let kind = 'phone';
+function setKind(k){
+  kind = k;
+  document.getElementById('segPhone').classList.toggle('on', k === 'phone');
+  document.getElementById('segApp').classList.toggle('on', k === 'app');
+  document.getElementById('targetLabel').textContent = k === 'phone' ? 'Phone number' : 'Their app ID';
+  const f = document.getElementById('fTarget');
+  f.placeholder = k === 'phone' ? '+919305578983' : 'amit';
+  f.type = k === 'phone' ? 'tel' : 'text';
+}
+
+function renderList(){
+  const box = document.getElementById('rows');
+  if(!db.items.length){
+    box.innerHTML = '<div class="empty">No codes yet.<br>Add one below, then type it on the keypad.</div>';
+    return;
+  }
+  const sorted = [...db.items].sort((a,b)=>Number(a.code)-Number(b.code));
+  box.innerHTML = '';
+  sorted.forEach(item=>{
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = '<div class="tag"></div><div class="rowmain">' +
+      '<div class="rowname"></div><div class="rowsub"></div></div>' +
+      '<button class="del">Remove</button>';
+    row.querySelector('.tag').textContent = item.code;
+    const nm = row.querySelector('.rowname');
+    nm.textContent = item.name;
+    const pill = document.createElement('span');
+    pill.className = 'pill';
+    pill.textContent = item.kind === 'app' ? 'app' : 'phone';
+    nm.appendChild(pill);
+    row.querySelector('.rowsub').textContent = item.target;
+    row.querySelector('.del').onclick = ()=>{
+      db.items = db.items.filter(i=>i.code !== item.code);
+      persist(); renderList(); refresh();
+    };
+    box.appendChild(row);
+  });
+}
+
+function saveContact(e){
+  e.preventDefault();
+  const c = document.getElementById('fCode').value.trim();
+  const n = document.getElementById('fName').value.trim();
+  const t = document.getElementById('fTarget').value.trim();
+
+  if(!/^\d{1,6}$/.test(c)){ toast('Code must be 1 to 6 digits'); return; }
+  if(kind === 'app' && t.toLowerCase() === db.id){ toast('That is your own ID'); return; }
+
+  db.items = db.items.filter(i=>i.code !== c);
+  db.items.push({ code:c, name:n, target:t, kind });
+  persist();
+  e.target.reset(); setKind('phone');
+  renderList(); refresh();
+}
+
+/* --------------------------------------------------------------- settings */
+document.getElementById('autoDial').onchange = (e)=>{ db.auto = e.target.checked; persist(); refresh(); };
+document.getElementById('delay').onchange = (e)=>{ db.delay = Number(e.target.value); persist(); refresh(); };
+
+function exportData(){
+  const blob = new Blob([JSON.stringify(db,null,2)],{type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'quickdial-backup.json';
+  a.click();
+}
+function resetAll(){
+  if(!confirm('Delete your ID and all codes?')) return;
+  try{ localStorage.removeItem(KEY); }catch(e){}
+  location.reload();
+}
+
+/* ------------------------------------------------------------ installable */
+const manifest = {
+  name:'Quick Dial', short_name:'Quick Dial', display:'standalone',
+  background_color:'#0E1118', theme_color:'#0E1118', start_url:'.'
+};
+const ml = document.createElement('link');
+ml.rel = 'manifest';
+ml.href = URL.createObjectURL(new Blob([JSON.stringify(manifest)],{type:'application/json'}));
+document.head.appendChild(ml);
+
+/* ------------------------------------------------------------------ start */
+load();
+setKind('phone');
+if(db.id){ show('dialer'); connect(); refresh(); paintStatus(); }
+else show('setup');
+
+document.addEventListener('keydown', e=>{
+  if(document.activeElement.tagName === 'INPUT') return;
+  if(/^[0-9]$/.test(e.key)) press(e.key);
+  else if(e.key === 'Backspace') backspace();
+  else if(e.key === 'Enter') startCall();
+});
+</script>
+</body>
+</html>
