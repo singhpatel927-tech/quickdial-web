@@ -202,6 +202,14 @@
     <input type="checkbox" id="knownOnly">
     <span>Only accept calls from my contacts</span>
   </label>
+  <label class="toggle">
+    <input type="checkbox" id="ringOn">
+    <span>Ring and vibrate for incoming calls</span>
+  </label>
+  <label class="toggle">
+    <input type="checkbox" id="autoAnswer">
+    <span>Answer incoming calls automatically</span>
+  </label>
   <div class="panel">
     <div>
       <label for="delay">Wait before auto-calling</label>
@@ -213,6 +221,16 @@
         <option value="8000">8 seconds</option>
       </select>
     </div>
+    <div>
+      <label for="answerDelay">Answer automatically after</label>
+      <select id="answerDelay">
+        <option value="0">Straight away</option>
+        <option value="2000">2 seconds</option>
+        <option value="5000">5 seconds</option>
+        <option value="10000">10 seconds</option>
+      </select>
+    </div>
+    <button class="ghost" id="notifyBtn" onclick="askNotify()">Turn on call notifications</button>
     <p class="hint">Your ID is <b id="idEcho"></b>. App calls need both people to have this page open.</p>
     <button class="ghost" onclick="exportData()">Export contacts</button>
     <button class="ghost" onclick="signOut()">Sign out</button>
@@ -233,7 +251,8 @@
 const KEY = 'quickdial.web.v1';
 const ID_FORMAT = /^[a-z][a-z.-]{1,19}\/[0-9]{1,10}$/;
 
-let db = { id:'', pass:'', items:[], auto:false, delay:3000, knownOnly:false };
+let db = { id:'', pass:'', items:[], auto:false, delay:3000, knownOnly:false,
+           ring:true, autoAnswer:false, answerDelay:0 };
 let authMode = 'signup';
 let code = '';
 let idleTimer = null, tick = null;
@@ -241,6 +260,7 @@ let idleTimer = null, tick = null;
 let ws = null, wsReady = false, reconnectAt = 1000;
 let pc = null, localStream = null, peer = null, incoming = null;
 let iceQueue = [];
+let audioCtx = null, ringTimer = null, answerTimer = null;
 
 function load(){
   try{ const raw = localStorage.getItem(KEY); if(raw) db = { ...db, ...JSON.parse(raw) }; }catch(e){}
@@ -256,7 +276,11 @@ function show(id){
     document.getElementById('autoDial').checked = db.auto;
     document.getElementById('delay').value = String(db.delay);
     document.getElementById('knownOnly').checked = db.knownOnly;
+    document.getElementById('ringOn').checked = db.ring;
+    document.getElementById('autoAnswer').checked = db.autoAnswer;
+    document.getElementById('answerDelay').value = String(db.answerDelay);
     document.getElementById('idEcho').textContent = db.id;
+    paintNotifyButton();
   }
 }
 function toast(msg){
@@ -392,7 +416,13 @@ async function handleSignal(m){
     }
     incoming = m;
     peer = m.from;
-    showCallScreen('Incoming call', nameFor(m.from), 'ringing');
+    const label = nameFor(m.from);
+    showCallScreen('Incoming call', label, 'ringing');
+    startRing();
+    notifyIncoming(label);
+    if(db.autoAnswer){
+      answerTimer = setTimeout(()=>{ if(incoming) acceptCall(); }, db.answerDelay);
+    }
     return;
   }
   if(m.type === 'answer' && pc){
@@ -414,6 +444,79 @@ async function flushIce(){
   while(iceQueue.length){ await pc.addIceCandidate(iceQueue.shift()).catch(()=>{}); }
 }
 
+/* ---------------------------------------------------------------- ringing */
+// Browsers block audio until the page has been touched, so the context is
+// created on the first interaction and reused after that.
+function unlockAudio(){
+  try{
+    if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if(audioCtx.state === 'suspended') audioCtx.resume();
+  }catch(e){}
+}
+document.addEventListener('pointerdown', unlockAudio);
+document.addEventListener('keydown', unlockAudio);
+
+function ringOnce(){
+  if(!audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  [0, 0.55].forEach(off=>{
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(480, t0 + off);
+    osc.frequency.setValueAtTime(620, t0 + off + 0.18);
+    gain.gain.setValueAtTime(0.0001, t0 + off);
+    gain.gain.exponentialRampToValueAtTime(0.35, t0 + off + 0.03);
+    gain.gain.setValueAtTime(0.35, t0 + off + 0.34);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + off + 0.42);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(t0 + off);
+    osc.stop(t0 + off + 0.45);
+  });
+}
+
+function testRing(){ ringOnce(); if(navigator.vibrate) navigator.vibrate(200); }
+
+function startRing(){
+  if(!db.ring) return;
+  unlockAudio();
+  const beat = ()=>{
+    ringOnce();
+    if(navigator.vibrate) navigator.vibrate([450, 200, 450]);
+  };
+  beat();
+  ringTimer = setInterval(beat, 2600);
+}
+
+function stopRing(){
+  if(ringTimer){ clearInterval(ringTimer); ringTimer = null; }
+  if(navigator.vibrate) navigator.vibrate(0);
+}
+
+function askNotify(){
+  if(!('Notification' in window)){ toast('This browser has no notifications'); return; }
+  Notification.requestPermission().then(()=>{ paintNotifyButton(); });
+}
+
+function paintNotifyButton(){
+  const b = document.getElementById('notifyBtn');
+  if(!b) return;
+  if(!('Notification' in window)){ b.textContent = 'Notifications not supported'; b.disabled = true; return; }
+  if(Notification.permission === 'granted') b.textContent = 'Call notifications are on';
+  else if(Notification.permission === 'denied') b.textContent = 'Notifications blocked in browser settings';
+  else b.textContent = 'Turn on call notifications';
+}
+
+function notifyIncoming(who){
+  try{
+    if(!('Notification' in window) || Notification.permission !== 'granted') return;
+    if(!document.hidden) return;
+    const n = new Notification('Quick Dial', { body: who + ' is calling', tag: 'qd-call' });
+    n.onclick = ()=>{ window.focus(); n.close(); };
+  }catch(e){}
+}
+
+/* ------------------------------------------------------------------ calls */
 function knownCaller(id){
   return db.items.some(i=>i.kind === 'app' && i.target.toLowerCase() === String(id).toLowerCase());
 }
@@ -457,6 +560,8 @@ async function appCall(targetId){
 }
 
 async function acceptCall(){
+  stopRing();
+  if(answerTimer){ clearTimeout(answerTimer); answerTimer = null; }
   const m = incoming; incoming = null;
   document.getElementById('callState').textContent = 'Connecting\u2026';
   try{
@@ -475,6 +580,8 @@ async function acceptCall(){
 }
 
 function rejectCall(){
+  stopRing();
+  if(answerTimer){ clearTimeout(answerTimer); answerTimer = null; }
   signal({ type:'reject', to:peer });
   incoming = null;
   endCall('Declined');
@@ -486,6 +593,8 @@ function hangUp(){
 }
 
 function endCall(reason){
+  stopRing();
+  if(answerTimer){ clearTimeout(answerTimer); answerTimer = null; }
   if(pc){ try{ pc.close(); }catch(e){} pc = null; }
   if(localStream){ localStream.getTracks().forEach(t=>t.stop()); localStream = null; }
   iceQueue = []; incoming = null; peer = null;
@@ -657,6 +766,12 @@ function saveContact(e){
 document.getElementById('autoDial').onchange = (e)=>{ db.auto = e.target.checked; persist(); refresh(); };
 document.getElementById('delay').onchange = (e)=>{ db.delay = Number(e.target.value); persist(); refresh(); };
 document.getElementById('knownOnly').onchange = (e)=>{ db.knownOnly = e.target.checked; persist(); };
+document.getElementById('ringOn').onchange = (e)=>{
+  db.ring = e.target.checked; persist();
+  if(db.ring){ unlockAudio(); testRing(); }
+};
+document.getElementById('autoAnswer').onchange = (e)=>{ db.autoAnswer = e.target.checked; persist(); };
+document.getElementById('answerDelay').onchange = (e)=>{ db.answerDelay = Number(e.target.value); persist(); };
 
 function exportData(){
   const safe = { ...db }; delete safe.pass;
