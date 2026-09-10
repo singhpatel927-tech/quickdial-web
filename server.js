@@ -37,10 +37,13 @@ async function initDb() {
     return;
   }
   const { Pool } = require('pg');
+  const url = process.env.DATABASE_URL;
+  const external = /sslmode=require/.test(url) || /@[^/]*\./.test(url);
   pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
+    connectionString: url,
+    ssl: external ? { rejectUnauthorized: false } : false
   });
+  console.log('Database SSL: ' + (external ? 'on' : 'off'));
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id     TEXT PRIMARY KEY,
