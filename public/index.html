@@ -210,6 +210,10 @@
     <input type="checkbox" id="autoAnswer">
     <span>Answer incoming calls automatically</span>
   </label>
+  <label class="toggle">
+    <input type="checkbox" id="keepAwake">
+    <span>Keep the screen on while the app is open</span>
+  </label>
   <div class="panel">
     <div>
       <label for="delay">Wait before auto-calling</label>
@@ -252,7 +256,7 @@ const KEY = 'quickdial.web.v1';
 const ID_FORMAT = /^[a-z][a-z.-]{1,19}\/[0-9]{1,10}$/;
 
 let db = { id:'', pass:'', items:[], auto:false, delay:3000, knownOnly:false,
-           ring:true, autoAnswer:false, answerDelay:0 };
+           ring:true, autoAnswer:false, answerDelay:0, keepAwake:true };
 let authMode = 'signup';
 let code = '';
 let idleTimer = null, tick = null;
@@ -261,6 +265,7 @@ let ws = null, wsReady = false, reconnectAt = 1000;
 let pc = null, localStream = null, peer = null, incoming = null;
 let iceQueue = [];
 let audioCtx = null, ringTimer = null, answerTimer = null;
+let wakeLock = null;
 
 function load(){
   try{ const raw = localStorage.getItem(KEY); if(raw) db = { ...db, ...JSON.parse(raw) }; }catch(e){}
@@ -279,6 +284,7 @@ function show(id){
     document.getElementById('ringOn').checked = db.ring;
     document.getElementById('autoAnswer').checked = db.autoAnswer;
     document.getElementById('answerDelay').value = String(db.answerDelay);
+    document.getElementById('keepAwake').checked = db.keepAwake;
     document.getElementById('idEcho').textContent = db.id;
     paintNotifyButton();
   }
@@ -443,6 +449,32 @@ async function handleSignal(m){
 async function flushIce(){
   while(iceQueue.length){ await pc.addIceCandidate(iceQueue.shift()).catch(()=>{}); }
 }
+
+/* -------------------------------------------------------------- screen on */
+// Screen Wake Lock keeps the display awake while the page is in front. The
+// lock is dropped by the browser whenever the page is hidden, so it has to be
+// taken again on every return to the foreground.
+async function requestWakeLock(){
+  if(!db.keepAwake) return;
+  if(!('wakeLock' in navigator)) return;
+  if(document.hidden) return;
+  try{
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', ()=>{ wakeLock = null; });
+  }catch(e){
+    // Denied on low battery or unsupported - not worth interrupting the user.
+  }
+}
+
+async function releaseWakeLock(){
+  try{ if(wakeLock) await wakeLock.release(); }catch(e){}
+  wakeLock = null;
+}
+
+document.addEventListener('visibilitychange', ()=>{
+  if(document.hidden) return;
+  if(db.keepAwake && !wakeLock) requestWakeLock();
+});
 
 /* ---------------------------------------------------------------- ringing */
 // Browsers block audio until the page has been touched, so the context is
@@ -772,6 +804,10 @@ document.getElementById('ringOn').onchange = (e)=>{
 };
 document.getElementById('autoAnswer').onchange = (e)=>{ db.autoAnswer = e.target.checked; persist(); };
 document.getElementById('answerDelay').onchange = (e)=>{ db.answerDelay = Number(e.target.value); persist(); };
+document.getElementById('keepAwake').onchange = (e)=>{
+  db.keepAwake = e.target.checked; persist();
+  if(db.keepAwake) requestWakeLock(); else releaseWakeLock();
+};
 
 function exportData(){
   const safe = { ...db }; delete safe.pass;
@@ -798,6 +834,7 @@ document.head.appendChild(ml);
 
 load();
 setKind('phone');
+requestWakeLock();
 if(db.id && db.pass){ authMode = 'signin'; show('dialer'); connect(); refresh(); paintStatus(); }
 else { setMode('signup'); show('setup'); }
 
