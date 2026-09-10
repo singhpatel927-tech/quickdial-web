@@ -38,6 +38,8 @@ async function initDb() {
   }
   const { Pool } = require('pg');
   const url = process.env.DATABASE_URL;
+  // Render's internal hostnames (dpg-xxxx-a) speak plain TCP; external hosts
+  // such as Neon or Render's external URL need SSL. Pick based on the host.
   const external = /sslmode=require/.test(url) || /@[^/]*\./.test(url);
   pool = new Pool({
     connectionString: url,
@@ -128,18 +130,29 @@ function verify(password, user) {
 
 const attempts = new Map();   // ip -> { count, until }
 
+// Wrong passwords allowed per 15 minutes. Set LOGIN_ATTEMPT_LIMIT=0 to switch
+// the lockout off entirely -- that also lets anyone guess passwords forever.
+const ATTEMPT_LIMIT = process.env.LOGIN_ATTEMPT_LIMIT === undefined
+  ? 25
+  : Number(process.env.LOGIN_ATTEMPT_LIMIT);
+
 function tooManyAttempts(ip) {
+  if (!ATTEMPT_LIMIT) return false;
   const rec = attempts.get(ip);
   if (!rec) return false;
   if (Date.now() > rec.until) { attempts.delete(ip); return false; }
-  return rec.count >= 8;
+  return rec.count >= ATTEMPT_LIMIT;
 }
 
 function noteFailure(ip) {
+  if (!ATTEMPT_LIMIT) return;
   const rec = attempts.get(ip) || { count: 0, until: Date.now() + 15 * 60 * 1000 };
   rec.count += 1;
   attempts.set(ip, rec);
 }
+
+// A correct password clears the record, so normal typos never accumulate.
+function clearAttempts(ip) { attempts.delete(ip); }
 
 /* ---------------------------------------------------------------- sockets */
 
@@ -243,7 +256,7 @@ wss.on('connection', (socket, req) => {
         return send(socket, { type: 'authfail', reason: 'Password must be at least 6 characters' });
       }
       if (tooManyAttempts(socket.ip)) {
-        return send(socket, { type: 'authfail', reason: 'Too many attempts. Try again in 15 minutes' });
+        return send(socket, { type: 'authfail', reason: 'Too many wrong passwords. Try again in 15 minutes' });
       }
 
       let user;
@@ -258,6 +271,7 @@ wss.on('connection', (socket, req) => {
         const salt = crypto.randomBytes(16).toString('hex');
         try { await putUser(id, salt, hashPassword(password, salt)); }
         catch (e) { return send(socket, { type: 'authfail', reason: 'That ID was just taken' }); }
+        clearAttempts(socket.ip);
         return send(socket, {
           type: 'pending',
           reason: 'Request sent. An admin has to approve it before you can sign in.'
@@ -271,6 +285,8 @@ wss.on('connection', (socket, req) => {
         noteFailure(socket.ip);
         return send(socket, { type: 'authfail', reason: 'Wrong password' });
       }
+
+      clearAttempts(socket.ip);
 
       const status = user.status || 'pending';
       if (status === 'pending') {
