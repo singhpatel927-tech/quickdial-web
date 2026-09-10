@@ -1,1 +1,228 @@
-a
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0E1118">
+<title>Quick Dial admin</title>
+<style>
+  :root{
+    --ink:#0E1118; --raised:#181D29; --line:#252C3B;
+    --text:#EAEDF4; --muted:#79839B; --signal:#F0A93B;
+    --call:#2E9E63; --end:#C0524B;
+    --pad: env(safe-area-inset-bottom, 0px);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{
+    margin:0;background:var(--ink);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    font-size:16px;line-height:1.4;
+  }
+  button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+  .wrap{max-width:640px;margin:0 auto;padding:20px 18px calc(30px + var(--pad))}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{font-size:13px;color:var(--muted);margin-bottom:20px}
+  label{display:block;font-size:13px;color:var(--muted);margin-bottom:5px}
+  input{width:100%;height:50px;padding:0 13px;border-radius:12px;background:var(--raised);
+    border:1px solid var(--line);color:var(--text);font-size:16px}
+  input:focus{outline:2px solid var(--signal);outline-offset:-1px}
+  .peek{position:relative}
+  .peek input{padding-right:56px}
+  .eye{position:absolute;right:4px;top:0;height:50px;width:50px;display:flex;
+    align-items:center;justify-content:center;font-size:18px;color:var(--muted)}
+  .eye.on{color:var(--signal)}
+  .primary{width:100%;height:52px;border-radius:14px;background:var(--signal);
+    color:#161207;font-weight:600;font-size:16px;margin-top:12px}
+  .warnline{font-size:13px;color:var(--end);min-height:1.2em;margin-top:8px}
+
+  .bar{display:flex;align-items:center;gap:10px;margin:22px 0 6px}
+  .bar h2{font-size:15px;font-weight:600;margin:0;flex:1}
+  .chip{font-size:11px;padding:3px 9px;border-radius:20px;background:var(--line);color:var(--muted)}
+  .refresh{font-size:14px;color:var(--signal);padding:6px}
+
+  .row{display:flex;align-items:center;gap:12px;padding:12px 2px;border-bottom:1px solid var(--line)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--line);flex:0 0 auto}
+  .dot.live{background:var(--call)}
+  .who{flex:1;min-width:0}
+  .uid{font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .when{font-size:12px;color:var(--muted)}
+  .act{font-size:13px;color:var(--muted);padding:8px 6px}
+  .act.go{color:var(--call)}
+  .act.danger{color:var(--end)}
+  .none{padding:30px 10px;text-align:center;color:var(--muted);font-size:14px}
+  .note{margin-top:24px;font-size:13px;color:var(--muted);border-top:1px solid var(--line);padding-top:14px}
+  .hide{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div id="gate">
+    <h1>Admin</h1>
+    <p class="sub">Enter the admin key you set in Render's environment variables.</p>
+    <label for="key">Admin key</label>
+    <div class="peek">
+      <input id="key" type="password" autocomplete="off">
+      <button type="button" class="eye" id="eyeBtn" onclick="togglePeek()" aria-label="Show key">&#128065;</button>
+    </div>
+    <div class="warnline" id="gateWarn"></div>
+    <button class="primary" onclick="unlock()">Open</button>
+  </div>
+
+  <div id="panel" class="hide">
+    <h1>Members</h1>
+    <p class="sub" id="summary"></p>
+
+    <div class="bar">
+      <h2>Waiting for approval</h2>
+      <span class="chip" id="pendCount">0</span>
+      <button class="refresh" onclick="loadUsers()">Refresh</button>
+    </div>
+    <div id="pendingRows"></div>
+
+    <div class="bar">
+      <h2>Members</h2>
+      <span class="chip" id="storeChip"></span>
+    </div>
+    <div id="memberRows"></div>
+
+    <p class="note" id="storeNote"></p>
+  </div>
+
+</div>
+
+<script>
+let key = '';
+
+function togglePeek(){
+  const f = document.getElementById('key');
+  const b = document.getElementById('eyeBtn');
+  const showing = f.type === 'text';
+  f.type = showing ? 'password' : 'text';
+  b.classList.toggle('on', !showing);
+}
+
+async function api(path, body){
+  const res = await fetch(path, {
+    method: body ? 'POST' : 'GET',
+    headers: { 'Content-Type':'application/json', 'x-admin-key': key },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(data.error || ('Request failed (' + res.status + ')'));
+  return data;
+}
+
+async function unlock(){
+  key = document.getElementById('key').value;
+  const warn = document.getElementById('gateWarn');
+  warn.textContent = '';
+  try{
+    await loadUsers();
+    document.getElementById('gate').classList.add('hide');
+    document.getElementById('panel').classList.remove('hide');
+  }catch(e){
+    warn.textContent = e.message;
+  }
+}
+
+async function loadUsers(){
+  const data = await api('/api/admin/users');
+  const users = data.users || [];
+
+  const waiting = users.filter(u=>u.status === 'pending');
+  const members = users.filter(u=>u.status === 'approved');
+  const blocked = users.filter(u=>u.status === 'rejected');
+  const live = members.filter(u=>u.online).length;
+
+  document.getElementById('summary').textContent =
+    members.length + ' approved, ' + waiting.length + ' waiting, ' +
+    blocked.length + ' declined \u00B7 ' + live + ' online now';
+
+  document.getElementById('pendCount').textContent = waiting.length;
+  document.getElementById('storeChip').textContent = data.storage;
+  document.getElementById('storeNote').textContent = data.storage === 'memory'
+    ? 'Accounts are held in memory and will vanish when the server restarts. Set DATABASE_URL to keep them.'
+    : 'Accounts are stored in Postgres and survive restarts.';
+
+  fill('pendingRows', waiting, 'Nothing waiting.');
+  fill('memberRows', members.concat(blocked), 'No members yet.');
+}
+
+function fill(boxId, list, emptyText){
+  const box = document.getElementById(boxId);
+  box.innerHTML = '';
+  if(!list.length){
+    box.innerHTML = '<div class="none">' + emptyText + '</div>';
+    return;
+  }
+  list.forEach(u=>{
+    const row = document.createElement('div');
+    row.className = 'row';
+
+    const dot = document.createElement('div');
+    dot.className = 'dot' + (u.online ? ' live' : '');
+
+    const who = document.createElement('div');
+    who.className = 'who';
+    const uid = document.createElement('div');
+    uid.className = 'uid';
+    uid.textContent = u.id;
+    const when = document.createElement('div');
+    when.className = 'when';
+    const joined = u.created_at ? ' \u00B7 ' + new Date(u.created_at).toLocaleDateString() : '';
+    when.textContent = (u.status === 'approved' ? (u.online ? 'Online' : 'Offline') :
+                        u.status === 'pending' ? 'Waiting' : 'Declined') + joined;
+    who.append(uid, when);
+    row.append(dot, who);
+
+    if(u.status === 'pending'){
+      row.append(action('Approve', ()=>setStatus(u.id, 'approved'), 'go'));
+      row.append(action('Decline', ()=>setStatus(u.id, 'rejected'), 'danger'));
+    }else if(u.status === 'rejected'){
+      row.append(action('Approve', ()=>setStatus(u.id, 'approved'), 'go'));
+      row.append(action('Delete', ()=>removeUser(u.id), 'danger'));
+    }else{
+      row.append(action('Password', ()=>resetPassword(u.id)));
+      row.append(action('Delete', ()=>removeUser(u.id), 'danger'));
+    }
+    box.appendChild(row);
+  });
+}
+
+function action(label, fn, extra){
+  const b = document.createElement('button');
+  b.className = 'act' + (extra ? ' ' + extra : '');
+  b.textContent = label;
+  b.onclick = fn;
+  return b;
+}
+
+async function setStatus(id, status){
+  if(status === 'rejected' && !confirm('Decline the request from "' + id + '"?')) return;
+  try{
+    await api('/api/admin/status', { id, status });
+    loadUsers();
+  }catch(e){ alert(e.message); }
+}
+
+async function resetPassword(id){
+  const pw = prompt('New password for ' + id + ' (at least 6 characters)');
+  if(pw === null) return;
+  try{
+    await api('/api/admin/password', { id, password: pw });
+    alert('Password changed. ' + id + ' has been signed out and must sign in again.');
+    loadUsers();
+  }catch(e){ alert(e.message); }
+}
+
+async function removeUser(id){
+  if(!confirm('Remove "' + id + '"? This cannot be undone.')) return;
+  try{
+    await api('/api/admin/delete', { id });
+    loadUsers();
+  }catch(e){ alert(e.message); }
+}
+</script>
+</body>
+</html>
